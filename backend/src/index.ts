@@ -9,14 +9,13 @@ dotenv.config();
 
 const app = express();
 app.use(express.json());
+const JWT_SECRET = process.env.JWT_SECRET;
 
 app.post("/api/v1/signup", async (req: any, res: any) => {
   const signupBody = zod.object({
     username: zod.string().min(1),
     password: zod.string().min(1),
   });
-
-  const JWT_SECRET = process.env.JWT_SECRET;
 
   try {
     const { success } = signupBody.safeParse(req.body);
@@ -72,10 +71,49 @@ app.post("/api/v1/signup", async (req: any, res: any) => {
 });
 
 app.post("/api/v1/signin", async (req: any, res: any) => {
-  const { username, password } = req.body;
+  const signinBody = zod.object({
+    username: zod.string().min(1),
+    password: zod.string().min(1),
+  });
 
   try {
-    res.json("signin");
+    const {success} = signinBody.safeParse(req.body);
+    if (!success) {
+        return res.status(403).json({
+          message: "Invalid form of input",
+        });
+      }  
+
+    const { username, password } = req.body;
+   
+    const ExistingUser = await prisma.user.findFirst({
+        where: {
+          username: username,
+        },
+      });
+
+      if(!ExistingUser) {
+        return res.status(411).json({
+            message: "User doesn't exists",
+          });
+      }
+
+     const validPassword = await bcrypt.compare(password,ExistingUser.password);
+
+     if(!validPassword) {
+        return res.status(401).json({
+            message:"Incorrect password"
+        })
+     }
+
+     const token = jwt.sign({id:ExistingUser.id},JWT_SECRET || "jiojjkh");
+
+    return res.status(200).json({
+        message:"signed in",
+        username,
+        token,
+        publicKey:ExistingUser.publicKey
+    });
   } catch (error) {
     console.log(error);
     res.status(500).json({
