@@ -3,13 +3,17 @@ import jwt from "jsonwebtoken";
 import prisma from "./prisma";
 import zod from "zod";
 import bcrypt from "bcrypt";
-import { Keypair } from "@solana/web3.js";
+import { Connection, Keypair, Transaction } from "@solana/web3.js";
+import cors from "cors";
 import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
 app.use(express.json());
+app.use(cors());
+
 const JWT_SECRET = process.env.JWT_SECRET;
+const connection = new Connection(process.env.ALCHEMY_URL || "");
 
 app.post("/api/v1/signup", async (req: any, res: any) => {
   const signupBody = zod.object({
@@ -77,42 +81,42 @@ app.post("/api/v1/signin", async (req: any, res: any) => {
   });
 
   try {
-    const {success} = signinBody.safeParse(req.body);
+    const { success } = signinBody.safeParse(req.body);
     if (!success) {
-        return res.status(403).json({
-          message: "Invalid form of input",
-        });
-      }  
+      return res.status(403).json({
+        message: "Invalid form of input",
+      });
+    }
 
     const { username, password } = req.body;
-   
+
     const ExistingUser = await prisma.user.findFirst({
-        where: {
-          username: username,
-        },
+      where: {
+        username: username,
+      },
+    });
+
+    if (!ExistingUser) {
+      return res.status(411).json({
+        message: "User doesn't exists",
       });
+    }
 
-      if(!ExistingUser) {
-        return res.status(411).json({
-            message: "User doesn't exists",
-          });
-      }
+    const validPassword = await bcrypt.compare(password, ExistingUser.password);
 
-     const validPassword = await bcrypt.compare(password,ExistingUser.password);
+    if (!validPassword) {
+      return res.status(401).json({
+        message: "Incorrect password",
+      });
+    }
 
-     if(!validPassword) {
-        return res.status(401).json({
-            message:"Incorrect password"
-        })
-     }
-
-     const token = jwt.sign({id:ExistingUser.id},JWT_SECRET || "jiojjkh");
+    const token = jwt.sign({ id: ExistingUser.id }, JWT_SECRET || "jiojjkh");
 
     return res.status(200).json({
-        message:"signed in",
-        username,
-        token,
-        publicKey:ExistingUser.publicKey
+      message: "signed in",
+      username,
+      token,
+      publicKey: ExistingUser.publicKey,
     });
   } catch (error) {
     console.log(error);
@@ -123,11 +127,38 @@ app.post("/api/v1/signin", async (req: any, res: any) => {
 });
 
 app.post("/api/v1/txn/sign", async (req: any, res: any) => {
-  const { username, password } = req.body;
-
   try {
-    res.status(200).json({
+    const serializedTransaction = req.body.message;
+    const buffer = Buffer.from(serializedTransaction, "base64");
+
+    const tx = Transaction.from(buffer);
+
+    console.log("Received transaction:", serializedTransaction);
+    console.log("Buffer:", buffer);
+
+    const user = await prisma.user.findFirst({
+      where: {
+        publicKey: tx.feePayer?.toBase58(),
+      },
+    });
+
+    if (!user || !user.privateKey) {
+      return res.status(404).json({
+        message: "User or private key not found",
+      });
+    }
+
+    const secretKey = Buffer.from(user.privateKey, "base64");
+    // console.log('secretKey: ',secretKey);
+    // console.log('user private key: ',user.privateKey);
+
+    const keyPair = Keypair.fromSecretKey(secretKey);
+    tx.sign(keyPair);
+    const signature = await connection.sendTransaction(tx, [keyPair]);
+
+    return res.status(200).json({
       id: "id_to_track_txn",
+      signature,
     });
   } catch (error) {
     console.log(error);
@@ -153,6 +184,6 @@ app.post("/api/v1/txn/?id=id", async (req: any, res: any) => {
   }
 });
 
-app.listen(3000,()=>{
-    console.log("http://localhost:3000");
-})
+app.listen(3000, () => {
+  console.log("http://localhost:3000");
+});
